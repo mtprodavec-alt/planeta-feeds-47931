@@ -262,7 +262,9 @@ def sale_costs(merged, cards):
     A sale card is matched to feed offers by model code (the part of vendorCode
     before the first "_"): codes from the card's variants, else codes that appear
     as words in its title. Only offers whose feed retail price equals the card's
-    old price are taken, and the cost is that retail price x (sale / old).
+    old price are taken. The public page shows retail prices only; the wholesale
+    price gets the same discount (e.g. retail 1320 -> 660, wholesale 880 -> 440),
+    so the cost is the feed wholesale x (sale / old).
     """
     by_model = defaultdict(list)
     for sku, o in merged.items():
@@ -282,9 +284,9 @@ def sale_costs(merged, cards):
         hits = 0
         for model in models:
             for sku in by_model[model]:
-                retail = merged[sku]["retail"]
-                if retail > 0 and abs(retail - origin) <= 1:
-                    costs[sku] = (retail * sale / origin).quantize(D("0.01"))
+                retail, wholesale = merged[sku]["retail"], merged[sku]["cost"]
+                if wholesale and retail > 0 and abs(retail - origin) <= 1:
+                    costs[sku] = (wholesale * sale / origin).quantize(D("0.01"))
                     hits += 1
         stats["sale card: matched" if hits else "sale card: old price differs from feed"] += 1
     stats["sale offers"] = len(costs)
