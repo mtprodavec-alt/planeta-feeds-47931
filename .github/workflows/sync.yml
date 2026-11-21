@@ -35,10 +35,15 @@ jobs:
           base="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
           curl -fsSL "$base/report.json" -o state.json || echo '{}' > state.json
           curl -fsSL "$base/new_ids.txt" -o prev_new_ids.txt || rm -f prev_new_ids.txt
+          curl -fsSL "$base/sale.json" -o prev_sale.json || rm -f prev_sale.json
+      - name: Planeta sale page (falls back to the previous list if the site fails)
+        run: python tools/parse_sale.py sale.json || { echo "::warning::sale page not parsed, using previous list"; if [ -f prev_sale.json ]; then cp prev_sale.json sale.json; fi; }
       - name: Build feeds
         env:
           PLANETA_FEED_TOKEN: ${{ secrets.PLANETA_FEED_TOKEN || secrets.LANETA_FEED_TOKEN }}
-        run: python sync.py --state state.json --site site
+        run: |
+          python sync.py --state state.json --site site --sale sale.json
+          if [ -f sale.json ]; then cp sale.json site/sale.json; fi
       - name: New products since the previous run?
         id: newcheck
         run: python tools/check_new.py prev_new_ids.txt site/new_ids.txt

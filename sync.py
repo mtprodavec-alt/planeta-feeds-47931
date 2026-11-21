@@ -106,6 +106,7 @@ def parse_feed(path):
                 "available": el.get("available") == "true",
                 "qty": int(text(el, "quantity_in_stock") or 0),
                 "cost": D(costs[0]) if len(costs) == 1 else None,
+                "retail": D(text(el, "price") or 0),
                 "category": text(el, "categoryId"),
                 "pictures": [p.text.strip() for p in el.findall("picture") if p.text and p.text.strip()],
                 "name_ru": text(el, "name"), "name_ua": text(el, "nameUA"),
@@ -252,6 +253,44 @@ def unique_name(o, names):
             "name_ua": f"{o['name_ua']} {' '.join(ua) or o['sku']}".strip()}
 
 
+CODE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-./]*[A-Za-z0-9]|[A-Za-z0-9]")
+
+
+def sale_costs(merged, cards):
+    """Map vendorCode -> purchase cost while the item is on Planeta's sale page.
+
+    A sale card is matched to feed offers by model code (the part of vendorCode
+    before the first "_"): codes from the card's variants, else codes that appear
+    as words in its title. Only offers whose feed retail price equals the card's
+    old price are taken, and the cost is that retail price x (sale / old).
+    """
+    by_model = defaultdict(list)
+    for sku, o in merged.items():
+        model = sku.split("_", 1)[0].upper()
+        if len(model) >= 3:
+            by_model[model].append(sku)
+    costs, stats = {}, Counter()
+    for card in cards:
+        origin, sale = D(str(card["origin"])), D(str(card["sale"]))
+        models = {c.upper() for c in card.get("codes", []) if c.upper() in by_model}
+        if not models:
+            tokens = {t.upper() for t in CODE_TOKEN.findall(card.get("title", ""))}
+            models = {t for t in tokens if t in by_model and any(ch.isdigit() for ch in t)}
+        if not models:
+            stats["sale card: no matching model in feed"] += 1
+            continue
+        hits = 0
+        for model in models:
+            for sku in by_model[model]:
+                retail = merged[sku]["retail"]
+                if retail > 0 and abs(retail - origin) <= 1:
+                    costs[sku] = (retail * sale / origin).quantize(D("0.01"))
+                    hits += 1
+        stats["sale card: matched" if hits else "sale card: old price differs from feed"] += 1
+    stats["sale offers"] = len(costs)
+    return costs, stats
+
+
 def new_offer_id(sku):
     return "JUK" + hashlib.sha1(sku.encode("utf-8")).hexdigest()[:10].upper()
 
@@ -264,6 +303,7 @@ def main():
     ap.add_argument("--site", type=Path, default=ROOT / "site")
     ap.add_argument("--state", type=Path, default=ROOT / "state.json",
                     help="previous run counts, used for the shrink check")
+    ap.add_argument("--sale", type=Path, help="sale.json from tools/parse_sale.py")
     a = ap.parse_args()
 
     paths = [a.feeds / f"{n}.xml" for n in FEEDS] if a.feeds else download(ROOT / ".feeds")
@@ -303,6 +343,12 @@ def main():
     comm = Commission(load_tariffs(ROOT / "config" / "tariff.xlsx"), {r["offer_id"]: r for r in store_rows})
 
     stats, sources = Counter(), Counter()
+    # Items on Planeta's sale page: cost = sale price, price by the formula
+    # without the "never below the current price" floor, old price = our current one.
+    sale = {}
+    if a.sale and a.sale.exists():
+        sale, sale_stats = sale_costs(merged, json.loads(a.sale.read_text(encoding="utf-8")))
+        stats.update(sale_stats)
     stock_xml, new_candidates, matched, used_ids = [], [], [], set()
     names = Counter(o["name_ru"] or o["name_ua"] for o in merged.values())
     for sku, o in sorted(merged.items()):
@@ -321,10 +367,20 @@ def main():
             sched, src = comm.for_store(s, o["brand"])
             matched.append((o, s, sched))
             current = D(s["price"] or 0)
-            price = selling_price(o["cost"], current, sched)
-            sources[src] += 1
-            stats["price raised" if price > current else "price kept"] += 1
             old = D(s["price_old"]) if s.get("price_old") else None
+            sources[src] += 1
+            regular = selling_price(o["cost"], current, sched)  # the usual price
+            if sku in sale:
+                price = selling_price(sale[sku], 0, sched)
+                if price < regular:
+                    old = max(regular, old or 0)  # the price it sold at before the sale
+                    stats["sale: price lowered"] += 1
+                else:
+                    price = regular
+                    stats["sale: no lower than usual price"] += 1
+            else:
+                price = regular
+                stats["price raised" if price > current else "price kept"] += 1
             if old is not None and old > price:
                 stats["price_old kept"] += 1
             stock_xml.append((o["category"], offer_xml(s["offer_id"], unique_name(o, names), price,
@@ -345,7 +401,8 @@ def main():
         o = unique_name(o, names)
         sched, src = comm.for_new(o)
         sources["new:" + src] += 1
-        price = selling_price(o["cost"], 0, sched)
+        price = selling_price(sale.get(o["sku"], o["cost"]), 0, sched)
+        stats["sale: new item at sale cost"] += o["sku"] in sale
         new_xml.append((o["category"], offer_xml(oid, o, price, "JUK-" + o["sku"])))
         new_ids.append(oid)
 
