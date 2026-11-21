@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 1 * * *"   # 01:00 UTC = 03:00 Kyiv (winter), 04:00 (summer)
   workflow_dispatch:
+    inputs:
+      test_ids:
+        description: "Test only: space-separated offer ids; feed.xml will contain just these"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -29,6 +34,11 @@ jobs:
         env:
           PLANETA_FEED_TOKEN: ${{ secrets.PLANETA_FEED_TOKEN || secrets.LANETA_FEED_TOKEN }}
         run: python sync.py --state state.json --site site
+      - name: Test mode (small feed.xml)
+        if: ${{ github.event.inputs.test_ids != '' && github.event.inputs.test_ids != null }}
+        run: |
+          python tools/subset_feed.py site/feed.xml site/feed-test.xml ${{ github.event.inputs.test_ids }}
+          mv site/feed-test.xml site/feed.xml
       - name: Static test files
         run: if [ -d static ]; then cp -r static/. site/; fi
       - uses: actions/configure-pages@v5
