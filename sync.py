@@ -39,7 +39,7 @@ FEEDS = (
 URL = "https://planeta-shop.com.ua/mod_user_xml_link/download_feed?"
 ROOT = Path(__file__).resolve().parent
 MAX_DROP = 0.20            # abort if a feed shrinks by more than 20% vs last run
-SPLIT_BYTES = 90 * 2**20   # keep each published file well under 100 MB
+MAX_FEED_BYTES = 95 * 2**20  # GitHub Pages: keep the single feed under 100 MB
 KYIV = timezone(timedelta(hours=2))
 
 
@@ -159,7 +159,11 @@ class Commission:
 
 # ---------- XML output ----------
 
+SPACES = re.compile(r"\s+")
+
+
 def cdata(s):
+    s = SPACES.sub(" ", s).strip()
     return "<![CDATA[" + s.replace("]]>", "]]]]><![CDATA[>") + "]]>"
 
 
@@ -182,11 +186,15 @@ def offer_xml(oid, o, price, article, full=True):
     if full:
         out += [f"<description>{cdata(o['desc_ru'] or o['desc_ua'] or o['name_ru'])}</description>",
                 f"<description_ua>{cdata(o['desc_ua'] or o['desc_ru'] or o['name_ua'])}</description_ua>"]
-        for name, _, ua, ru in o["params"]:
-            if name.casefold() == "бренд":
-                continue
-            out.append(f'<param name={quoteattr(name)}><value lang="uk">{escape(ua)}</value>'
-                       f'<value lang="ru">{escape(ru)}</value></param>')
+    else:
+        # Existing cards: PriceCreator takes the description only on first import,
+        # so a short one keeps the single feed small and leaves manual edits alone.
+        out += [f"<description>{cdata(o['name_ru'] or o['name_ua'])}</description>",
+                f"<description_ua>{cdata(o['name_ua'] or o['name_ru'])}</description_ua>"]
+    for name, _, ua, ru in o["params"]:
+        if name.casefold() == "бренд":
+            continue
+        out.append(f"<param name={quoteattr(name)}>{escape(ua)}</param>")
     out.append("</offer>")
     return CTRL.sub("", "".join(out)) + "\n"
 
@@ -295,7 +303,7 @@ def main():
             price = selling_price(o["cost"], current, sched)
             sources[src] += 1
             stats["price raised" if price > current else "price kept"] += 1
-            stock_xml.append((o["category"], offer_xml(s["offer_id"], unique_name(o, names), price, s["article"])))
+            stock_xml.append((o["category"], offer_xml(s["offer_id"], unique_name(o, names), price, s["article"], full=False)))
         else:
             new_candidates.append(o)
     comm.learn_planeta(matched)
@@ -317,14 +325,20 @@ def main():
 
     a.site.mkdir(parents=True, exist_ok=True)
     now = datetime.now(KYIV)
-    write_feed(a.site / "stock.xml", cats, stock_xml, now)
-    new_files = write_split(a.site, "new", cats, new_xml, now)
+    # One feed for both jobs: PriceCreator auto-update refreshes price/stock of
+    # existing offers, a (re)import of the same URL adds the new ones.
+    feed_path = a.site / "feed.xml"
+    write_feed(feed_path, cats, stock_xml + new_xml, now)
+    size = feed_path.stat().st_size
+    if size > MAX_FEED_BYTES:
+        sys.exit(f"feed.xml is {size / 2**20:.0f} MB, over the {MAX_FEED_BYTES / 2**20:.0f} MB limit")
+    new_files = []
     missing = len(store) - len(matched)
     report = {
         "generated": now.isoformat(timespec="minutes"),
         "feeds": feed_info, "supplier_offers": len(merged), "duplicates_across_feeds": conflicts,
         "store_items": len(store), "store_matched": len(matched), "store_not_in_feeds": missing,
-        "new_items": len(new_xml), "files": ["stock.xml", *new_files],
+        "new_items": len(new_xml), "feed_mb": round(size / 2**20, 1), "files": ["feed.xml", *new_files],
         "stats": dict(stats), "commission_source": dict(sources),
     }
     (a.site / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
