@@ -333,7 +333,7 @@ def main():
             new_candidates.append(o)
     comm.learn_planeta(matched)
 
-    new_xml = []
+    new_xml, new_ids = [], []
     for o in new_candidates:
         if not o["pictures"]:
             stats["new skipped: no picture"] += 1
@@ -347,6 +347,7 @@ def main():
         sources["new:" + src] += 1
         price = selling_price(o["cost"], 0, sched)
         new_xml.append((o["category"], offer_xml(oid, o, price, "JUK-" + o["sku"])))
+        new_ids.append(oid)
 
     a.site.mkdir(parents=True, exist_ok=True)
     now = datetime.now(KYIV)
@@ -367,6 +368,9 @@ def main():
         "stats": dict(stats), "commission_source": dict(sources),
     }
     (a.site / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+    # Offer ids that are not in the store snapshot; the workflow compares this list
+    # with the previous run's to decide whether PriceCreator must import new cards.
+    (a.site / "new_ids.txt").write_text("\n".join(sorted(new_ids)) + "\n", encoding="utf-8")
     (a.site / "index.html").write_text(
         "<!doctype html><meta charset=utf-8><title>Feeds 47931</title><ul>"
         + "".join(f'<li><a href="{n}">{n}</a></li>' for n in report["files"] + ["report.json"])

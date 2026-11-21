@@ -23,17 +23,25 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    outputs:
+      has_new: ${{ steps.newcheck.outputs.has_new }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Previous report (for the feed shrink check)
-        run: curl -fsSL "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/report.json" -o state.json || echo '{}' > state.json
+      - name: Previous report and new-id list
+        run: |
+          base="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          curl -fsSL "$base/report.json" -o state.json || echo '{}' > state.json
+          curl -fsSL "$base/new_ids.txt" -o prev_new_ids.txt || rm -f prev_new_ids.txt
       - name: Build feeds
         env:
           PLANETA_FEED_TOKEN: ${{ secrets.PLANETA_FEED_TOKEN || secrets.LANETA_FEED_TOKEN }}
         run: python sync.py --state state.json --site site
+      - name: New products since the previous run?
+        id: newcheck
+        run: python tools/check_new.py prev_new_ids.txt site/new_ids.txt
       - name: Test mode (small feed.xml)
         if: ${{ github.event.inputs.test_ids != '' && github.event.inputs.test_ids != null }}
         run: |
@@ -55,3 +63,23 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # PriceCreator's auto-update only refreshes price and stock; new cards appear
+  # only on an import. Once the new feed is live, start the import of source 34503
+  # when the supplier added products since the previous run.
+  import:
+    needs: [build, deploy]
+    if: ${{ needs.build.outputs.has_new == 'true' && (github.event.inputs.test_ids == '' || github.event.inputs.test_ids == null) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Wait until the new feed is served
+        run: sleep 90
+      - name: Start PriceCreator import (source 34503)
+        env:
+          PRICECREATOR_UUID: ${{ secrets.PRICECREATOR_UUID }}
+        run: python tools/start_import.py "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/feed.xml" 47931 34503
