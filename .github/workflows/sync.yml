@@ -1,0 +1,45 @@
+name: Planeta -> PriceCreator nightly sync
+
+on:
+  schedule:
+    - cron: "0 1 * * *"   # 01:00 UTC = 03:00 Kyiv (winter), 04:00 (summer)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Previous report (for the feed shrink check)
+        run: curl -fsSL "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/report.json" -o state.json || echo '{}' > state.json
+      - name: Build feeds
+        env:
+          PLANETA_FEED_TOKEN: ${{ secrets.PLANETA_FEED_TOKEN }}
+        run: python sync.py --state state.json --site site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
