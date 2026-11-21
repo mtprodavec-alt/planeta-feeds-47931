@@ -284,19 +284,36 @@ def main():
 
     with open(ROOT / "config" / "store.csv", encoding="utf-8") as f:
         store_rows = list(csv.DictReader(f))
-    store = {r["article"]: r for r in store_rows}
+    store = {}
+    for r in store_rows:  # some cards carry the Planeta code as OFFERID only
+        store.setdefault(r["offer_id"], r)
+    for r in store_rows:  # cards we created earlier carry article JUK-<vendorCode>
+        if r["article"].startswith("JUK-"):
+            store.setdefault(r["article"][4:], r)
+    store.update({r["article"]: r for r in store_rows})
     store_ids = {r["offer_id"] for r in store_rows}
+    amb_path = ROOT / "config" / "ambiguous_articles.txt"
+    ambiguous = set(amb_path.read_text(encoding="utf-8").split("\n")) if amb_path.exists() else set()
+    ambiguous |= {a[4:] for a in ambiguous if a.startswith("JUK-")}
+    ambiguous.discard("")
     comm = Commission(load_tariffs(ROOT / "config" / "tariff.xlsx"), {r["offer_id"]: r for r in store_rows})
 
     stats, sources = Counter(), Counter()
-    stock_xml, new_candidates, matched = [], [], []
+    stock_xml, new_candidates, matched, used_ids = [], [], [], set()
     names = Counter(o["name_ru"] or o["name_ua"] for o in merged.values())
     for sku, o in sorted(merged.items()):
         if o["cost"] is None or o["cost"] <= 0:
             stats["skip: no wholesale price"] += 1
             continue
         s = store.get(sku)
+        if not s and sku in ambiguous:
+            stats["skip: several store cards share this article"] += 1
+            continue
+        if s and s["offer_id"] in used_ids:
+            stats["skip: store card already matched to another supplier code"] += 1
+            continue
         if s:
+            used_ids.add(s["offer_id"])
             sched, src = comm.for_store(s, o["brand"])
             matched.append((o, s, sched))
             current = D(s["price"] or 0)
@@ -333,11 +350,11 @@ def main():
     if size > MAX_FEED_BYTES:
         sys.exit(f"feed.xml is {size / 2**20:.0f} MB, over the {MAX_FEED_BYTES / 2**20:.0f} MB limit")
     new_files = []
-    missing = len(store) - len(matched)
+    missing = len(store_rows) - len(matched)
     report = {
         "generated": now.isoformat(timespec="minutes"),
         "feeds": feed_info, "supplier_offers": len(merged), "duplicates_across_feeds": conflicts,
-        "store_items": len(store), "store_matched": len(matched), "store_not_in_feeds": missing,
+        "store_items": len(store_rows), "store_matched": len(matched), "store_not_in_feeds": missing,
         "new_items": len(new_xml), "feed_mb": round(size / 2**20, 1), "files": ["feed.xml", *new_files],
         "stats": dict(stats), "commission_source": dict(sources),
     }

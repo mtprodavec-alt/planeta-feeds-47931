@@ -16,6 +16,7 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 from collections import Counter
+from pathlib import Path
 from zipfile import ZipFile
 
 
@@ -70,6 +71,13 @@ def main(catalog, commissions, out):
                         r.get("Ціна", "").strip(), comm.get(oid, "")])
             stats["written"] += 1
             stats["with commission"] += oid in comm
+    # Articles we cannot map to one card: sync.py neither updates nor re-creates them.
+    ambiguous = sorted({r.get("Артикул", "").strip() for r in rows
+                        if r.get("Артикул", "").strip()
+                        and (articles[r.get("Артикул", "").strip()] > 1 or ids[r.get("OFFERID", "").strip()] > 1)})
+    with open(Path(out).with_name("ambiguous_articles.txt"), "w", encoding="utf-8") as f:
+        f.write("\n".join(ambiguous) + "\n")
+    stats["ambiguous articles"] = len(ambiguous)
     print(dict(stats))
 
 
