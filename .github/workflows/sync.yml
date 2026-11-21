@@ -29,6 +29,8 @@ jobs:
         env:
           PLANETA_FEED_TOKEN: ${{ secrets.PLANETA_FEED_TOKEN || secrets.LANETA_FEED_TOKEN }}
         run: python sync.py --state state.json --site site
+      - name: Static test files
+        run: if [ -d static ]; then cp -r static/. site/; fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
