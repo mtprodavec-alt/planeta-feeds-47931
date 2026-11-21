@@ -27,7 +27,7 @@ jobs:
         run: curl -fsSL "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/report.json" -o state.json || echo '{}' > state.json
       - name: Build feeds
         env:
-          PLANETA_FEED_TOKEN: ${{ secrets.PLANETA_FEED_TOKEN }}
+          PLANETA_FEED_TOKEN: ${{ secrets.PLANETA_FEED_TOKEN || secrets.LANETA_FEED_TOKEN }}
         run: python sync.py --state state.json --site site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
