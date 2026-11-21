@@ -170,11 +170,15 @@ def cdata(s):
 CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
-def offer_xml(oid, o, price, article, full=True):
+def offer_xml(oid, o, price, article, full=True, price_old=None):
     qty = o["qty"] if o["available"] else 0
     avail = "true" if qty > 0 else "false"
-    out = [f'<offer id={quoteattr(oid)} available="{avail}">',
-           f"<price>{price}</price>", "<currencyId>UAH</currencyId>",
+    out = [f'<offer id={quoteattr(oid)} available="{avail}">', f"<price>{price}</price>"]
+    # PriceCreator's update zeroes the strikethrough price when the feed has none,
+    # so pass the cabinet's current one through while it is still above the price.
+    if price_old is not None and price_old > price:
+        out.append(f"<price_old>{price_old}</price_old>")
+    out += ["<currencyId>UAH</currencyId>",
            f"<categoryId>{escape(o['category'])}</categoryId>",
            f"<stock_quantity>{qty}</stock_quantity>"]
     for p in o["pictures"][:15]:
@@ -320,7 +324,11 @@ def main():
             price = selling_price(o["cost"], current, sched)
             sources[src] += 1
             stats["price raised" if price > current else "price kept"] += 1
-            stock_xml.append((o["category"], offer_xml(s["offer_id"], unique_name(o, names), price, s["article"], full=False)))
+            old = D(s["price_old"]) if s.get("price_old") else None
+            if old is not None and old > price:
+                stats["price_old kept"] += 1
+            stock_xml.append((o["category"], offer_xml(s["offer_id"], unique_name(o, names), price,
+                                                       s["article"], full=False, price_old=old)))
         else:
             new_candidates.append(o)
     comm.learn_planeta(matched)

@@ -58,7 +58,7 @@ def main(catalog, commissions, out):
     stats = Counter()
     with open(out, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["offer_id", "article", "rz_category", "price", "commission"])
+        w.writerow(["offer_id", "article", "rz_category", "price", "commission", "price_old"])
         for r in sorted(rows, key=lambda r: r.get("OFFERID", "")):
             oid, art = r.get("OFFERID", "").strip(), r.get("Артикул", "").strip()
             if not oid or not art:
@@ -68,7 +68,7 @@ def main(catalog, commissions, out):
                 stats["skip: duplicate id/article"] += 1
                 continue
             w.writerow([oid, art, clean_num(r.get("ID категорії ROZETKA")),
-                        r.get("Ціна", "").strip(), comm.get(oid, "")])
+                        r.get("Ціна", "").strip(), comm.get(oid, ""), r.get("Стара ціна", "").strip()])
             stats["written"] += 1
             stats["with commission"] += oid in comm
     # Articles we cannot map to one card: sync.py neither updates nor re-creates them.
